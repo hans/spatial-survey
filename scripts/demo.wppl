@@ -1,0 +1,57 @@
+var absDxMuPrior = Uniform({a: 0, b: 3});
+var absDxSigmaPrior = Uniform({a: 0, b: 0.5});
+var interveningHPrior = Beta({a: 1, b: 1});
+
+var getCategory = mem(function(name) {
+  return {
+    "name": name,
+    "abs_dx": {mu: sample(absDxMuPrior), sigma: sample(absDxSigmaPrior)},
+    "intervening": {p: sample(interveningHPrior)},
+  };
+});
+
+var sampleRelation = function(category) {
+  return {
+    "abs_dx": sample(category["abs_dx"]),
+    "intervening": sample(category["intervening"]),
+  }
+};
+
+var observedData = [
+  {
+    "category": "near",
+    "abs_dx": 3,
+    "intervening": true,
+  },
+  {
+    "category": "near",
+    "abs_dx": 3,
+    "intervening": false,
+  },
+  {
+    "category": "near",
+    "abs_dx": 4,
+    "intervening": true,
+  },
+  {
+    "category": "next_to",
+    "abs_dx": 0.1,
+    "intervening": false,
+  },
+];
+
+var catPosterior = Infer({method: "MCMC", samples: 1000, lag: 10,
+                          callbacks: [editor.MCMCProgress()]}, function() {
+  var obsFn = function(datum) {
+    var category = getCategory(datum["category"]);
+    observe(Gaussian(category["abs_dx"]), datum["abs_dx"]);
+    observe(Bernoulli(category["intervening"]), datum["intervening"]);
+  };
+  mapData({data: observedData}, obsFn);
+  return {"near": getCategory("near").abs_dx.mu,
+          "near_s": getCategory("near").abs_dx.sigma,
+          "next_to": getCategory("next_to").abs_dx.mu,
+          "next_to_s": getCategory("next_to").abs_dx.sigma};
+});
+
+viz.density(catPosterior);
