@@ -6,7 +6,6 @@ import numpy as np
 import pymc3 as pm
 
 
-# TODO
 types = ["near", "next to"]
 assignments = [0, 0, 1, 1]
 points = [100, 120, 30, 25]
@@ -25,7 +24,7 @@ with model:
 
     # Fit.
     mh = pm.Metropolis(vars=[dist_means, dist_sd])
-    result = pm.sample(1000, step=[mh])
+    result = pm.sample(1000, step=mh)
 
     pm.traceplot(result[250:])
     plt.tight_layout()
