@@ -84,6 +84,23 @@ class EIGPredictor(object):
     return (p_assignment * assignment_kl).sum()
 
 
+def active_loop(model, data_sampler, assignment_fn,
+                batch_size=10):
+  """
+  Run an active learning loop, incrementally requesting labels for potential
+  new samples.
+
+  Args:
+    model: pymc3 model
+    data_sampler: generator which yields observed data points
+    assignment_fn: function which provides labels for sampled data points.
+      (We're aiming to minimize calls to this function.)
+    batch_size: Number of samples to compare on each iteration before
+      requesting a single label.
+  """
+  pass
+
+
 types = ["near", "next to"]
 # d_assignments_0 = [0, 0, 0, 0, 1, 1, 1, 1]
 # d_points_0 = [100, 120, 140, 110, 30, 25, 19, 36]
