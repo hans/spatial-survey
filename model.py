@@ -12,7 +12,7 @@ from pymc3.plots.artists import kdeplot_op
 from scipy import integrate
 from scipy.stats import norm
 from theano import shared
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
 
 @contextmanager
@@ -95,9 +95,9 @@ class EIGPredictor(object):
     p_assignment /= p_assignment.sum()
 
     # Add data point.
-    with temp_append(d_points, np.cast["float32"](x)):
+    with temp_append(d_points, x):
       assignment_kl = np.zeros(self.k)
-      for assignment in range(self.k):
+      for assignment in trange(self.k, desc="Enumerating assignments"):
         with temp_append(d_assignments, assignment):
           result = pm.sample(2000, step=self.steps, trace=self.orig_trace)
           # Drop first bit
