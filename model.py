@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import matplotlib
 matplotlib.use("Agg")
 
@@ -9,6 +11,33 @@ from pymc3.plots.artists import kdeplot_op
 from scipy import integrate
 from scipy.stats import norm
 from theano import shared
+from tqdm import tqdm
+
+
+@contextmanager
+def temp_set(var, value):
+  """
+  Context manager which temporarily updates the value of a shared
+  variable.
+
+  Yields value of shared variable before temporary update is performed.
+  """
+  old_value = var.get_value()
+  var.set_value(value)
+  yield old_value
+  var.set_value(old_value)
+
+
+@contextmanager
+def temp_append(var, x):
+  """
+  Context manager which temporarily appends a value to a shared array.
+  """
+  old_value = var.get_value()
+  var.set_value(
+      np.concatenate([old_value, [np.cast[old_value.dtype](x)]]))
+  yield
+  var.set_value(old_value)
 
 
 class EIGPredictor(object):
@@ -30,8 +59,8 @@ class EIGPredictor(object):
 
   def _sample_ppc(self):
     for assignment in range(k):
-      d_assignments.set_value([assignment] * len(d_assignments_0))
-      self._ppcs[assignment] = pm.sample_ppc(self.orig_trace, samples=1000, vars=[model["points"]])["points"]
+      with temp_set(d_assignments, [assignment] * len(d_assignments_0)):
+        self._ppcs[assignment] = pm.sample_ppc(self.orig_trace, samples=1000, vars=[model["points"]])["points"]
 
   def _kde_entropy(self, sample):
     """
@@ -65,21 +94,20 @@ class EIGPredictor(object):
     p_assignment /= p_assignment.sum()
 
     # Add data point.
-    d_points.set_value(d_points_0 + [np.cast["float32"](x)])
+    with temp_append(d_points, np.cast["float32"](x)):
+      assignment_kl = np.zeros(self.k)
+      for assignment in range(self.k):
+        with temp_append(d_assignments, assignment):
+          result = pm.sample(2000, step=self.steps, trace=self.orig_trace)
+          # Drop first bit
+          result = result[500:]
 
-    assignment_kl = np.zeros(self.k)
-    for assignment in range(self.k):
-      d_assignments.set_value(d_assignments_0 + [assignment])
-      result = pm.sample(2000, step=self.steps, trace=self.orig_trace)
-      # Drop first bit
-      result = result[500:]
+        # Get KDE of posterior over latents and estimate entropy.
+        total_post_entropy = 0
+        for distr in range(self.k):
+          total_post_entropy += self._kde_entropy(result["dist_means"][:, distr])
 
-      # Get KDE of posterior over latents and estimate entropy.
-      total_post_entropy = 0
-      for distr in range(self.k):
-        total_post_entropy += self._kde_entropy(result["dist_means"][:, distr])
-
-      assignment_kl[assignment] = total_post_entropy - self._entropy_pre
+        assignment_kl[assignment] = total_post_entropy - self._entropy_pre
 
     return (p_assignment * assignment_kl).sum()
 
