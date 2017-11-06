@@ -7,11 +7,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pymc3 as pm
+from pymc3.model import ObservedRV
 from pymc3.plots.kdeplot import fast_kde, kdeplot
 from pymc3.plots.artists import kdeplot_op
 from scipy import integrate
 from scipy.stats import norm
 from theano import shared
+from theano.tensor.sharedvar import TensorSharedVariable
 from tqdm import tqdm, trange
 
 
@@ -48,19 +50,62 @@ class EIGPredictor(object):
   Caches quantities which don't change w.r.t. the EIG argument.
   """
 
-  def __init__(self, model, k, trace, steps):
+  def __init__(self, model, k, trace, steps, assignment_var=None,
+               query_vars=None, opt_vars=None):
+    """
+    Args:
+      model: pymc3 model
+      k: number of possible assignments
+      orig_trace: model fit trace with which to initialize EIG fit
+        calculations
+      steps: model fit steps
+      assignment_var: observed RV in the model which assigns instances to
+        classes. By default, will look for an observed RV named
+        "assignments."
+      query_vars: input variables with which we are querying EIG. By
+        default, all observed RVs of the model except for the
+        assignment var.
+      opt_vars: random variables whose information we want to gain! By
+        default, all unobserved RVs of the model.
+    """
+
     self.model = model
     self.k = k
     self.orig_trace = trace
     self.steps = steps
 
+    try:
+      self.assignment_var = assignment_var or model.named_vars["assignments"]
+    except KeyError:
+      raise ValueError(
+          "assignment_var not provided and model has no RV "
+          "named 'assignments'")
+    if not isinstance(self.assignment_var, ObservedRV):
+      raise ValueError("assignment_var (name '%s') is not an ObservedRV"
+                       % self.assignment_var.name)
+
+    self.query_vars = list(filter(lambda x: x != self.assignment_var,
+                                  query_vars or model.observed_RVs))
+    self.opt_vars = opt_vars or model.free_RVs
+
+    # Hack: grab shared variable from assignment var
+    self.assignment_shared = self.assignment_var.observations
+    if not isinstance(self.assignment_shared, TensorSharedVariable):
+      # Try again.
+      try:
+        self.assignment_shared = self.assignment_shared.owner.inputs[0]
+      except AttributeError:
+        raise ValueError("failed to extract shared assignments data. make "
+            "sure you are using a shared variable in observations.")
+    assert isinstance(self.assignment_shared, TensorSharedVariable)
+
     self._ppcs = {}
     self._sample_ppc()
-    self._calculate_entropy_pre()
+    self._entropy_pre = self._calculate_opt_var_entropy(self.orig_trace)
 
   def _sample_ppc(self):
     for assignment in range(k):
-      with temp_set(d_assignments, [assignment] * len(d_assignments_0)):
+      with temp_set(self.assignment_shared, [assignment] * len(d_assignments_0)):
         self._ppcs[assignment] = pm.sample_ppc(self.orig_trace, samples=1000, vars=[model["points"]])["points"]
 
   def _kde_entropy(self, sample):
@@ -76,19 +121,33 @@ class EIGPredictor(object):
     kde_entropy = -integrate.simps(kde_density, xs)
     return kde_entropy
 
-  def _calculate_entropy_pre(self):
-    total_pre_entropy = 0
-    for assignment in range(self.k):
-      total_pre_entropy += self._kde_entropy(self.orig_trace["dist_means"][:, assignment])
+  def _calculate_opt_var_entropy(self, trace):
+    total = 0
+    for opt_var in self.opt_vars:
+      trace_data = self.orig_trace[opt_var.name]
 
-    self._entropy_pre = total_pre_entropy
+      if trace_data.ndim == 2:
+        # var is not shared across assignments.
+        assert trace_data.shape[1] == self.k
+      else:
+        # Fake a second axis to make the computation nice and uniform.
+        trace_data = trace_data[:, np.newaxis]
+
+      for assignment in range(trace_data.shape[1]):
+        total += self._kde_entropy(trace_data[:, assignment])
+
+    return total
 
   def eig(self, x):
     """
     Estimate the expected information gain of observing a new datum.
+
+    Args:
+      x: a possible assignment of `query_vars`
     """
     # First compute p(x) under current model's posterior predictive
     # (estimate with Gaussian)
+    # TODO generalize to non-scalar input points.
     p_assignment = np.array([
       norm.pdf(x, loc=self._ppcs[idx].mean(), scale=self._ppcs[idx].std())
       for idx in range(self.k)])
@@ -98,15 +157,13 @@ class EIGPredictor(object):
     with temp_append(d_points, x):
       assignment_kl = np.zeros(self.k)
       for assignment in trange(self.k, desc="Enumerating assignments"):
-        with temp_append(d_assignments, assignment):
+        with temp_append(self.assignment_shared, assignment):
           result = pm.sample(2000, step=self.steps, trace=self.orig_trace)
           # Drop first bit
           result = result[500:]
 
         # Get KDE of posterior over latents and estimate entropy.
-        total_post_entropy = 0
-        for distr in range(self.k):
-          total_post_entropy += self._kde_entropy(result["dist_means"][:, distr])
+        total_post_entropy = self._calculate_opt_var_entropy(result)
 
         assignment_kl[assignment] = total_post_entropy - self._entropy_pre
 
@@ -114,7 +171,7 @@ class EIGPredictor(object):
 
 
 def active_loop(model, data_sampler, assignment_fn,
-                batch_size=10):
+                batch_size=10, **eig_args):
   """
   Run an active learning loop, incrementally requesting labels for potential
   new samples.
@@ -130,12 +187,12 @@ def active_loop(model, data_sampler, assignment_fn,
 
   with model:
     # Inference steps
-    steps = [pm.Metropolis(vars=[dist_means, dist_sd, p])]
+    steps = [pm.Metropolis()]
 
     i = 0
     while True:
       # Run a first MH inference.
-      result = pm.sample(5000, step=steps)
+      result = pm.sample(2000, step=steps)
       # Burn-in.
       result = result[1000:]
 
@@ -145,7 +202,7 @@ def active_loop(model, data_sampler, assignment_fn,
       fig.tight_layout()
       fig.savefig("active.%02i.png" % i)
 
-      eig_predictor = EIGPredictor(model, k, result, steps)
+      eig_predictor = EIGPredictor(model, k, result, steps, **eig_args)
 
       # Sample and score candidates.
       samples = []
@@ -235,4 +292,4 @@ if __name__ == '__main__':
     label = int(label.strip())
     return label
 
-  active_loop(model, data_sampler, assignment_fn)
+  active_loop(model, data_sampler, assignment_fn, opt_vars=[dist_means, dist_sd])
