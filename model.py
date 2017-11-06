@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import itertools
 
 import matplotlib
 matplotlib.use("Agg")
@@ -126,8 +127,46 @@ def active_loop(model, data_sampler, assignment_fn,
     batch_size: Number of samples to compare on each iteration before
       requesting a single label.
   """
-  pass
 
+  with model:
+    # Inference steps
+    steps = [pm.Metropolis(vars=[dist_means, dist_sd, p])]
+
+    i = 0
+    while True:
+      # Run a first MH inference.
+      result = pm.sample(5000, step=steps)
+      # Burn-in.
+      result = result[1000:]
+
+      # Plot result at this iter.
+      fig, ax = plt.subplots()
+      kdeplot_op(ax, result["dist_means"])
+      fig.tight_layout()
+      fig.savefig("active.%02i.png" % i)
+
+      eig_predictor = EIGPredictor(model, k, result, steps)
+
+      # Sample and score candidates.
+      samples = []
+      for _, sample in tqdm(zip(range(batch_size), data_sampler),
+                            desc="Drawing and scoring samples",
+                            total=batch_size):
+        score = eig_predictor.eig(sample)
+        samples.append((score, sample))
+
+      # Request label for max-scoring candidate.
+      _, sample = max(samples, key=lambda x: x[0])
+      label = assignment_fn(sample)
+
+      # Add to dataset.
+      # TODO: generalize
+      d_points.set_value(
+          np.concatenate([d_points.get_value(), [sample]]).astype(np.float32))
+      d_assignments.set_value(
+          np.concatenate([d_assignments.get_value(), [label]]).astype(np.int32))
+
+      i += 1
 
 types = ["near", "next to"]
 # d_assignments_0 = [0, 0, 0, 0, 1, 1, 1, 1]
@@ -153,33 +192,47 @@ with model:
   points = pm.Normal("points", mu=dist_means[d_assignments], sd=dist_sd,
              observed=d_points)
 
-  # Fit.
-  mh = pm.Metropolis(vars=[dist_means, dist_sd, p])
-  steps = [mh]
-  result = pm.sample(5000, step=steps)
-  result = result[1000:]
+  # # Fit.
+  # mh = pm.Metropolis(vars=[dist_means, dist_sd, p])
+  # steps = [mh]
+  # result = pm.sample(5000, step=steps)
+  # result = result[1000:]
 
-  # #########
+  # # #########
 
-  eig_predictor = EIGPredictor(model, k, result, steps)
-  xs = np.linspace(-20, 150, 50)
-  eigs = np.array([eig_predictor.eig(x) for x in xs])
+  # eig_predictor = EIGPredictor(model, k, result, steps)
+  # xs = np.linspace(-20, 150, 50)
+  # eigs = np.array([eig_predictor.eig(x) for x in xs])
 
-  from pprint import pprint
-  pprint(list(zip(xs, eigs)))
+  # from pprint import pprint
+  # pprint(list(zip(xs, eigs)))
 
-  # ##########
+  # # ##########
 
-  fig, ax1 = plt.subplots()
-  ax1.set_ylabel("density")
+  # fig, ax1 = plt.subplots()
+  # ax1.set_ylabel("density")
 
-  # Plot KDE of dist_means
-  kdeplot_op(ax1, result["dist_means"])
+  # # Plot KDE of dist_means
+  # kdeplot_op(ax1, result["dist_means"])
 
-  # Plot EIG samples.
-  ax2 = ax1.twinx()
-  ax2.set_ylabel("EIG")
-  ax2.scatter(xs, eigs, c='r')
+  # # Plot EIG samples.
+  # ax2 = ax1.twinx()
+  # ax2.set_ylabel("EIG")
+  # ax2.scatter(xs, eigs, c='r')
 
-  plt.tight_layout()
-  plt.savefig("after.png")
+  # plt.tight_layout()
+  # plt.savefig("after.png")
+
+if __name__ == '__main__':
+  # Infinite random number generator.
+  data_sampler = (np.random.random() * 100 for _ in itertools.count())
+
+  def assignment_fn(sample):
+    # Get rid of potential tqdm mess.
+    print()
+
+    label = input("Label of %.3f? > " % sample)
+    label = int(label.strip())
+    return label
+
+  active_loop(model, data_sampler, assignment_fn)
