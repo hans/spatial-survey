@@ -225,6 +225,45 @@ def active_loop(model, data_sampler, assignment_fn,
 
       i += 1
 
+
+def eig_demo(model):
+  """
+  Basic EIG demo for this model. Saves a figure `after.png`.
+  """
+  with model:
+    # Fit.
+    mh = pm.Metropolis(vars=[dist_means, dist_sd, p])
+    steps = [mh]
+    result = pm.sample(5000, step=steps)
+    result = result[1000:]
+
+    # #########
+
+    eig_predictor = EIGPredictor(model, k, result, steps,
+                                opt_vars=[dist_means, dist_sd])
+    xs = np.linspace(-20, 150, 50)
+    eigs = np.array([eig_predictor.eig(x) for x in xs])
+
+    from pprint import pprint
+    pprint(list(zip(xs, eigs)))
+
+    # ##########
+
+    fig, ax1 = plt.subplots()
+    ax1.set_ylabel("density")
+
+    # Plot KDE of dist_means
+    kdeplot_op(ax1, result["dist_means"])
+
+    # Plot EIG samples.
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("EIG")
+    ax2.scatter(xs, eigs, c='r')
+
+    plt.tight_layout()
+    plt.savefig("after.png")
+
+
 types = ["near", "next to"]
 # d_assignments_0 = [0, 0, 0, 0, 1, 1, 1, 1]
 # d_points_0 = [100, 120, 140, 110, 30, 25, 19, 36]
@@ -249,47 +288,19 @@ with model:
   points = pm.Normal("points", mu=dist_means[d_assignments], sd=dist_sd,
              observed=d_points)
 
-  # # Fit.
-  # mh = pm.Metropolis(vars=[dist_means, dist_sd, p])
-  # steps = [mh]
-  # result = pm.sample(5000, step=steps)
-  # result = result[1000:]
-
-  # # #########
-
-  # eig_predictor = EIGPredictor(model, k, result, steps)
-  # xs = np.linspace(-20, 150, 50)
-  # eigs = np.array([eig_predictor.eig(x) for x in xs])
-
-  # from pprint import pprint
-  # pprint(list(zip(xs, eigs)))
-
-  # # ##########
-
-  # fig, ax1 = plt.subplots()
-  # ax1.set_ylabel("density")
-
-  # # Plot KDE of dist_means
-  # kdeplot_op(ax1, result["dist_means"])
-
-  # # Plot EIG samples.
-  # ax2 = ax1.twinx()
-  # ax2.set_ylabel("EIG")
-  # ax2.scatter(xs, eigs, c='r')
-
-  # plt.tight_layout()
-  # plt.savefig("after.png")
 
 if __name__ == '__main__':
-  # Infinite random number generator.
-  data_sampler = (np.random.random() * 100 for _ in itertools.count())
+  eig_demo(model)
 
-  def assignment_fn(sample):
-    # Get rid of potential tqdm mess.
-    print()
+#   # Infinite random number generator.
+#   data_sampler = (np.random.random() * 100 for _ in itertools.count())
 
-    label = input("Label of %.3f? > " % sample)
-    label = int(label.strip())
-    return label
+#   def assignment_fn(sample):
+#     # Get rid of potential tqdm mess.
+#     print()
 
-  active_loop(model, data_sampler, assignment_fn, opt_vars=[dist_means, dist_sd])
+#     label = input("Label of %.3f? > " % sample)
+#     label = int(label.strip())
+#     return label
+
+#   active_loop(model, data_sampler, assignment_fn, opt_vars=[dist_means, dist_sd])
