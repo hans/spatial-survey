@@ -76,16 +76,18 @@ def eig_demo(model):
   """
   with model:
     # Fit.
-    mh = pm.Metropolis(vars=[dist_means, dist_sd, p])
+    mh = pm.Metropolis(vars=[term_means, term_sd])
     steps = [mh]
-    result = pm.sample(5000, step=steps)
+    result = pm.sample(2000, step=steps)
     result = result[1000:]
 
     # #########
 
+    xs = np.tile(np.linspace(-20, 150, 2)[:, np.newaxis],
+                 (1, d))
+
     eig_predictor = EIGPredictor(model, k, result, steps,
-                                opt_vars=[dist_means, dist_sd])
-    xs = np.linspace(-20, 150, 25)
+                                 opt_vars=[term_means, term_sd])
     eigs = np.array([eig_predictor.eig(x)
                      for x in tqdm(xs, desc="EIG at points")])
 
@@ -113,25 +115,35 @@ types = ["near", "next to"]
 # d_assignments_0 = [0, 0, 0, 0, 1, 1, 1, 1]
 # d_points_0 = [100, 120, 140, 110, 30, 25, 19, 36]
 d_assignments_0 = [0, 1]
-d_points_0 = [100, 30]
+d_points_0 = np.array([[100, 5],
+                       [30, 10]])
 
 d_assignments = shared(np.array(d_assignments_0, dtype=np.int32))
-d_points = shared(np.array(d_points_0, dtype=np.float32))
-n = len(d_points_0)#shared(np.array(d_points_0, dtype=np.int32))
+d_points = shared(d_points_0.astype(np.float32))
+
+# n: # observed points
+# d: dimensionality of observations
+# k: number of underlying spatial relations
+n, d = d_points_0.shape
 k = len(types)
 
 
 model = pm.Model()
 with model:
-  dist_means = pm.Normal("dist_means", mu=[100] * len(types), sd=50, shape=len(types))
-  dist_sd = pm.Uniform("dist_sd", lower=0, upper=10)
+  term_means = pm.MvNormal("dist_means",
+      mu=50. * np.ones((k, d)),
+      cov=50. * np.eye(d),
+      shape=(k, d))
+  term_sd = pm.Uniform("dist_sd", lower=0, upper=10)
 
-  p = pm.Dirichlet("p", a=np.array([1., 1.]), shape=len(types))
-  assignments = pm.Categorical("assignments", p=p, observed=d_assignments)
+  assignments = pm.Categorical("assignments",
+      p=np.ones(k), observed=d_assignments)
 
   # Likelihood for observed assignments.
-  points = pm.Normal("points", mu=dist_means[d_assignments], sd=dist_sd,
-             observed=d_points)
+  points = pm.MvNormal("points",
+      mu=term_means[assignments],
+      cov=np.eye(d),
+      observed=d_points)
 
 
 if __name__ == '__main__':

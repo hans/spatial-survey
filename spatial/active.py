@@ -7,7 +7,7 @@ import pymc3 as pm
 from pymc3.model import ObservedRV
 from pymc3.plots.kdeplot import fast_kde
 from scipy import integrate
-from scipy.stats import norm
+from scipy.stats import norm, multivariate_normal as mvnorm
 from tqdm import trange
 
 from spatial.util import temp_set, temp_append, extract_shared
@@ -121,10 +121,12 @@ class EIGPredictor(object):
       x: a possible assignment of `query_vars`
     """
     # First compute p(x) under current model's posterior predictive
-    # (estimate with Gaussian)
-    # TODO generalize to non-scalar input points.
+    # (estimate with multivariate Gaussian)
+    print(self._ppcs[0][:10])
+    print(np.cov(self._ppcs[0], rowvar=False))
     p_assignment = np.array([
-      norm.pdf(x, loc=self._ppcs[idx].mean(), scale=self._ppcs[idx].std())
+      mvnorm.pdf(x, mean=self._ppcs[idx].mean(axis=0),
+                 cov=np.cov(self._ppcs[idx], rowvar=False))
       for idx in range(self.k)])
     p_assignment /= p_assignment.sum()
 
