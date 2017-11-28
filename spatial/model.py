@@ -85,8 +85,9 @@ def eig_demo(model):
 
     eig_predictor = EIGPredictor(model, k, result, steps,
                                 opt_vars=[dist_means, dist_sd])
-    xs = np.linspace(-20, 150, 50)
-    eigs = np.array([eig_predictor.eig(x) for x in xs])
+    xs = np.linspace(-20, 150, 25)
+    eigs = np.array([eig_predictor.eig(x)
+                     for x in tqdm(xs, desc="EIG at points")])
 
     from pprint import pprint
     pprint(list(zip(xs, eigs)))
